@@ -1,0 +1,58 @@
+//@version=5
+strategy("Gold/BTC Z-Score Strategy", overlay=false, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// — Inputs —
+len = input.int(30, title="Z-Score Lookback Period")
+gold_symbol = input.string("EURUSD", title="Gold Symbol")
+btc_symbol  = input.string("USDJPY", title="BTC Symbol")
+
+// — Prices —
+gold = request.security(gold_symbol, timeframe.period, close)
+btc  = request.security(btc_symbol,  timeframe.period, close)
+
+// — Spread: Gold/BTC ratio —
+spread = gold / btc
+mean_spread = ta.sma(spread, len)
+std_spread  = ta.stdev(spread, len)
+z_spread = (spread - mean_spread) / std_spread
+
+// — BTC/USD Z-score —
+mean_btc = ta.sma(btc, len)
+std_btc  = ta.stdev(btc, len)
+z_btc = (btc - mean_btc) / std_btc
+
+// — Entry Logic —
+// Condition A: Long BTC / Short Gold
+longBTC = z_spread > 2 and z_btc < -2
+
+// Condition B: Long Gold / Short BTC
+longGold = z_spread < -2 and z_btc > 2
+
+// === Positions (Simulated via internal logic — since we can't trade multiple symbols directly) ===
+// === Exit logic: close all trades if Z-scores intersect ===
+intersect = ta.crossover(z_spread, z_btc) or ta.crossunder(z_spread, z_btc)
+if intersect
+    strategy.close("LongBTC")
+    strategy.close("ShortGold")
+    strategy.close("LongGold")
+    strategy.close("ShortBTC")
+
+// Only enter a new trade if none are open
+if strategy.opentrades == 0
+    if longBTC
+        strategy.entry("LongBTC", strategy.long)
+        strategy.entry("ShortGold", strategy.short)
+    else if longGold
+        strategy.entry("LongGold", strategy.long)
+        strategy.entry("ShortBTC", strategy.short)
+
+
+// — Plot Z-Scores
+plot(z_spread, title="Z-Score: Gold/BTC", color=color.orange, linewidth=2)
+plot(z_btc,    title="Z-Score: BTC/USD",  color=color.teal,   linewidth=2)
+
+hline(0,  "Mean",  color=color.gray)
+hline(1,  "+1σ",   color=color.green, linestyle=hline.style_dashed)
+hline(-1, "-1σ",   color=color.red,   linestyle=hline.style_dashed)
+hline(2,  "+2σ",   color=color.green, linestyle=hline.style_dotted)
+hline(-2, "-2σ",   color=color.red,   linestyle=hline.style_dotted)

@@ -1,0 +1,95 @@
+//@version=5
+strategy("final4amt5", overlay=true, initial_capital=1000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.cash_per_contract, commission_value=0.005, calc_on_every_tick=true, process_orders_on_close=false)
+
+// === Inputs ===
+i_ma1         = input.int(200,    "MA 1 Length (slow)",  step=10, group="Strategy")
+i_ma2         = input.int(10,     "MA 2 Length (fast)",  step=10, group="Strategy")
+i_stopPercent = input.float(0.005,"SL % (0.5%)",        step=0.001, group="Strategy")
+i_failSL      = input.float(0.10,  "Failsafe SL %",      step=0.1,   group="Strategy")
+leftBars      = input.int(10,     "Pivot Left Bars",     minval=1,  group="Price Action")
+rightBars     = input.int(10,     "Pivot Right Bars",    minval=1,  group="Price Action")
+
+// === Moving Averages ===
+maSlow = ta.sma(close, i_ma1)
+maFast = ta.sma(close, i_ma2)
+
+// === Pivot-High Detection ===
+pivotHighVal = ta.pivothigh(high, leftBars, rightBars)
+isPivotHigh  = not na(pivotHighVal)
+
+// === Entry State ===
+var float entryLongPrice  = na
+var float origLongSize    = na
+var float entryShortPrice = na
+var float origShortSize   = na
+
+// === ALERT MESSAGE TEMPLATES ===
+alert_msg_long       = "8236368920789,BUY,"  + syminfo.ticker + ",ENTRY,risk={{strategy.order.contracts}}"
+alert_msg_long_exit  = "8236368920789,SELL," + syminfo.ticker + ",EXIT,qty={{strategy.order.contracts}}"
+alert_msg_tp1_long   = "8236368920789,SELL," + syminfo.ticker + ",TP1,qty={{strategy.order.contracts}}"
+alert_msg_tp2_long   = "8236368920789,SELL," + syminfo.ticker + ",TP2,qty={{strategy.order.contracts}}"
+alert_msg_tp3_long   = "8236368920789,SELL," + syminfo.ticker + ",TP3,qty={{strategy.order.contracts}}"
+alert_msg_short      = "8236368920789,SELL," + syminfo.ticker + ",ENTRY,risk={{strategy.order.contracts}}"
+alert_msg_short_exit = "8236368920789,BUY,"  + syminfo.ticker + ",EXIT,qty={{strategy.order.contracts}}"
+alert_msg_tp1_short  = "8236368920789,BUY,"  + syminfo.ticker + ",TP1,qty={{strategy.order.contracts}}"
+alert_msg_tp2_short  = "8236368920789,BUY,"  + syminfo.ticker + ",TP2,qty={{strategy.order.contracts}}"
+alert_msg_tp3_short  = "8236368920789,BUY,"  + syminfo.ticker + ",TP3,qty={{strategy.order.contracts}}"
+
+// Reset when flat
+if strategy.position_size == 0
+    entryLongPrice  := na
+    origLongSize    := na
+    entryShortPrice := na
+    origShortSize   := na
+
+// === Long entry ===
+longCond = close > maSlow and close < maFast and strategy.position_size == 0
+if longCond
+    strategy.entry(id="Long", direction=strategy.long, alert_message=alert_msg_long)
+if strategy.position_size > 0 and na(entryLongPrice)
+    entryLongPrice := close, origLongSize := strategy.position_size
+
+// === Long partial-TPs ===
+if not na(origLongSize)
+    strategy.exit(id="TP1_Long", from_entry="Long", qty=origLongSize*0.5,   limit=entryLongPrice*1.01,   alert_message=alert_msg_tp1_long)
+    strategy.exit(id="TP2_Long", from_entry="Long", qty=origLongSize*0.3,   limit=entryLongPrice*1.015,  alert_message=alert_msg_tp2_long)
+    strategy.exit(id="TP3_Long", from_entry="Long", qty=origLongSize*0.2,   limit=entryLongPrice*1.02,   alert_message=alert_msg_tp3_long)
+
+// === Long SL / exit ===
+stopDistL = strategy.position_size > 0 ? (entryLongPrice - close) / entryLongPrice : na
+stopPrimL = stopDistL >= i_stopPercent
+stopFailL = stopDistL >= i_failSL
+exitLong  = strategy.position_size > 0 and (stopPrimL or stopFailL or isPivotHigh or ta.crossunder(close, maSlow))
+if exitLong
+    strategy.close(id="Long", comment= isPivotHigh ? "Pivot-High Exit" : ta.crossunder(close, maSlow) ? "CrossBelowMA200" : stopPrimL ? "SL 0.5%" : "FailSL", alert_message=alert_msg_long_exit)
+
+// === Short entry ===
+shortEntry = ta.crossunder(close, maSlow)
+if shortEntry
+    if strategy.position_size > 0
+        strategy.close(id="Long", comment="CrossBelowMA200", alert_message=alert_msg_long_exit)
+    strategy.entry(id="Short", direction=strategy.short, alert_message=alert_msg_short)
+if strategy.position_size < 0 and na(entryShortPrice)
+    entryShortPrice := close, origShortSize := -strategy.position_size
+
+// === Short partial-TPs ===
+if not na(origShortSize)
+    strategy.exit(id="TP1_Shrt", from_entry="Short", qty=origShortSize*0.5, limit=entryShortPrice*0.99,  alert_message=alert_msg_tp1_short)
+    strategy.exit(id="TP2_Shrt", from_entry="Short", qty=origShortSize*0.3, limit=entryShortPrice*0.985, alert_message=alert_msg_tp2_short)
+    strategy.exit(id="TP3_Shrt", from_entry="Short", qty=origShortSize*0.2, limit=entryShortPrice*0.98,  alert_message=alert_msg_tp3_short)
+
+// === Short SL / exit ===
+stopDistS  = strategy.position_size < 0 ? (close - entryShortPrice) / entryShortPrice : na
+stopPrimS  = stopDistS >= i_stopPercent
+stopFailS  = stopDistS >= i_failSL
+exitShort  = strategy.position_size < 0 and (stopPrimS or stopFailS or ta.crossover(maFast, maSlow))
+if exitShort
+    strategy.close(id="Short", comment= stopPrimS ? "Short SL 0.5%" : stopFailS ? "Short FailSL" : "MA10>MA200", alert_message=alert_msg_short_exit)
+
+// === Plotting ===
+plotshape(longCond,   style=shape.labelup,   location=location.belowbar, text="Long",  color=color.green)
+plotshape(exitLong,   style=shape.labeldown, location=location.abovebar, text="ExitL", color=color.red)
+plotshape(shortEntry, style=shape.labeldown, location=location.abovebar, text="Short", color=color.red)
+plotshape(exitShort,  style=shape.labelup,   location=location.belowbar, text="ExitS", color=color.green)
+plot(maSlow, color=color.blue)
+plot(maFast, color=color.orange)
